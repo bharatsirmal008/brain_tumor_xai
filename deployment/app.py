@@ -1,5 +1,6 @@
 ﻿from pathlib import Path
 import sys
+from io import BytesIO
 import tempfile
 import os
 
@@ -39,6 +40,8 @@ from deployment.input_guard import (
     severe_image_problem,
     image_quality_warning,
 )
+
+from deployment.report_generator import build_patient_report
 
 
 # ================================================================================================================
@@ -131,6 +134,12 @@ st.markdown(
     border: 1px solid rgba(128,128,128,.18);
     padding: 15px;
     border-radius: 14px;
+}
+
+[data-testid="stImage"] img {
+    border: none !important;
+    outline: none !important;
+    box-shadow: none !important;
 }
 
 </style>
@@ -335,10 +344,14 @@ def make_gradcam_overlay(
 
     fig, ax = plt.subplots(
         figsize=(
-            5.2,
-            5.2
-        )
+            6.4,
+            6.4
+        ),
+        dpi=180
     )
+
+    fig.patch.set_facecolor("black")
+    ax.set_facecolor("black")
 
 
     # MRI base
@@ -347,7 +360,7 @@ def make_gradcam_overlay(
         cmap="gray",
         vmin=0,
         vmax=1,
-        interpolation="bicubic"
+        interpolation="lanczos"
     )
 
 
@@ -358,7 +371,7 @@ def make_gradcam_overlay(
         vmin=0,
         vmax=1,
         alpha=alpha_map,
-        interpolation="bicubic"
+        interpolation="lanczos"
     )
 
 
@@ -416,6 +429,87 @@ def make_gradcam_overlay(
     return fig
 
 
+def figure_to_borderless_png(fig):
+    """Convert a Grad-CAM figure to a sharp PNG without a surrounding frame."""
+    output = BytesIO()
+    fig.savefig(
+        output,
+        format="png",
+        dpi=180,
+        facecolor="black",
+        edgecolor="none",
+        bbox_inches=None,
+        pad_inches=0,
+    )
+    output.seek(0)
+    return output.getvalue()
+
+
+def make_mri_figure(image):
+    """Render a processed MRI slice without altering inference data."""
+    fig, ax = plt.subplots(figsize=(5.2, 5.2))
+    ax.imshow(image, cmap="gray", vmin=0, vmax=1, interpolation="bicubic")
+    ax.axis("off")
+    fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+    return fig
+
+
+def make_gradcam_heatmap(raw_cam):
+    """Render the normalized Grad-CAM values as a standalone heatmap."""
+    cam = np.clip(np.asarray(raw_cam, dtype=np.float32), 0.0, 1.0)
+    fig, ax = plt.subplots(figsize=(5.2, 5.2))
+    heatmap = ax.imshow(cam, cmap="jet", vmin=0, vmax=1, interpolation="bicubic")
+    ax.axis("off")
+    fig.colorbar(heatmap, ax=ax, fraction=0.046, pad=0.04)
+    fig.subplots_adjust(left=0, right=0.9, top=1, bottom=0)
+    return fig
+
+
+def gradcam_summary(image, raw_cam):
+    """Calculate display-space CAM statistics inside the visible MRI support."""
+    cam = np.clip(np.asarray(raw_cam, dtype=np.float32), 0.0, 1.0)
+    support = anatomy_alpha_mask(image) >= 0.08
+    if not np.any(support):
+        support = np.ones_like(cam, dtype=bool)
+
+    supported_cam = np.where(support, cam, -1.0)
+    y, x = np.unravel_index(np.argmax(supported_cam), supported_cam.shape)
+    height, width = cam.shape
+
+    horizontal = "left" if x < width / 3 else "right" if x >= 2 * width / 3 else "center"
+    vertical = "upper" if y < height / 3 else "lower" if y >= 2 * height / 3 else "middle"
+    values = cam[support]
+
+    return {
+        "location": f"{horizontal}-{vertical}",
+        "high": float(np.mean(values >= 0.70) * 100.0),
+        "moderate": float(np.mean((values >= 0.40) & (values < 0.70)) * 100.0),
+        "low": float(np.mean((values > 0.0) & (values < 0.40)) * 100.0),
+    }
+
+
+def shapley_explanation(feature_name, value, predicted_name):
+    magnitude = abs(float(value))
+    strength = "very small" if magnitude <= 0.01 else "small" if magnitude < 0.05 else "noticeable"
+
+    if value > 0.01:
+        return (
+            f"{feature_name} supported the {predicted_name} prediction. The positive influence "
+            f"means this feature increased the model's support for {predicted_name} relative "
+            f"to the clinical baseline. Its magnitude was {strength}."
+        )
+    if value < -0.01:
+        return (
+            f"{feature_name} opposed the {predicted_name} prediction. The negative influence "
+            f"means this feature reduced the model's support for {predicted_name} relative "
+            f"to the clinical baseline. Its magnitude was {strength}."
+        )
+    return (
+        f"{feature_name} had a very small influence on the {predicted_name} prediction; "
+        "its Shapley value was close to zero."
+    )
+
+
 # ================================================================================================================
 # HUMAN-FRIENDLY CLINICAL INFLUENCE GRAPH
 # ================================================================================================================
@@ -465,7 +559,8 @@ def make_clinical_influence_chart(
 
 
     fig, ax = plt.subplots(
-        figsize=(8, 2.8)
+        figsize=(8.5, 3.2),
+        dpi=160
     )
 
 
@@ -476,9 +571,16 @@ def make_clinical_influence_chart(
     )
 
 
+    bar_colors = [
+        "#2E8B57" if value > 0.01 else "#C94C4C" if value < -0.01 else "#7A8A99"
+        for value in values
+    ]
+
     bars = ax.barh(
         y,
-        values
+        values,
+        color=bar_colors,
+        height=0.48
     )
 
 
@@ -524,41 +626,31 @@ def make_clinical_influence_chart(
         values
     ):
 
-        direction = (
-            "supports"
-            if value > 0
-            else
-            "opposes"
-            if value < 0
-            else
-            "neutral"
-        )
+        x = float(value)
+        is_large_enough = abs(x) >= max_abs * 0.28
 
-        x = float(
-            value
-        )
-
-        offset = (
-            max_abs * 0.04
-        )
+        if is_large_enough:
+            label_x = x / 2
+            label_color = "white"
+            horizontal_alignment = "center"
+        else:
+            label_x = (
+                max_abs * 0.10
+                if x >= 0
+                else -max_abs * 0.10
+            )
+            label_color = "#1C2630"
+            horizontal_alignment = "left" if x >= 0 else "right"
 
         ax.text(
-            x + (
-                offset
-                if x >= 0
-                else -offset
-            ),
-            bar.get_y()
-            +
-            bar.get_height() / 2,
-            f"{value:+.4f}  ({direction})",
+            label_x,
+            bar.get_y() + bar.get_height() / 2,
+            f"{value:+.4f}",
             va="center",
-            ha=(
-                "left"
-                if x >= 0
-                else "right"
-            ),
-            fontsize=10
+            ha=horizontal_alignment,
+            fontsize=10,
+            fontweight="semibold",
+            color=label_color
         )
 
 
@@ -575,7 +667,18 @@ def make_clinical_influence_chart(
     )
 
 
-    fig.tight_layout()
+    ax.text(
+        0.5,
+        -0.27,
+        "Green = supports prediction    |    Red = opposes prediction    |    Gray = minimal influence",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=8.5,
+        color="#596773"
+    )
+
+    fig.tight_layout(pad=1.4)
 
     return fig
 
@@ -738,7 +841,7 @@ if all_files:
         st.image(
             axial_file,
             caption="Axial MRI",
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -747,7 +850,7 @@ if all_files:
         st.image(
             coronal_file,
             caption="Coronal MRI",
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -756,7 +859,7 @@ if all_files:
         st.image(
             sagittal_file,
             caption="Sagittal MRI",
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -1028,7 +1131,7 @@ if all_files and not ready and not hard_errors:
 analyze = st.button(
     "🔬 Analyze MRI",
     type="primary",
-    use_container_width=True,
+    width="stretch",
     disabled=not ready
 )
 
@@ -1083,12 +1186,23 @@ if analyze:
             )
 
 
-        # ========================================================================================================
-        # PREDICTION
-        # ========================================================================================================
+        predicted_name = result["predicted_class"].title()
+        confidence_percent = float(result["confidence"]) * 100.0
 
+        # 1. PATIENT INPUT SUMMARY
         st.markdown(
-            '<div class="section">Prediction Result</div>',
+            '<div class="section">Patient Input Summary</div>',
+            unsafe_allow_html=True
+        )
+        summary_cols = st.columns(3)
+        summary_cols[0].metric("Age", f"{float(age):.0f} years")
+        summary_cols[1].metric("Sex", str(sex).title())
+        summary_cols[2].metric("MRI views", "3 validated views")
+        st.caption("Inputs used: axial, coronal and sagittal MRI views together with Age and Sex.")
+
+        # 2. AI PREDICTION
+        st.markdown(
+            '<div class="section">AI Prediction</div>',
             unsafe_allow_html=True
         )
 
@@ -1104,7 +1218,7 @@ if analyze:
                 f"""
 <div class="result-card">
 <div class="result-label">Predicted Tumor Type</div>
-<div class="result-value">{result["predicted_class"].title()}</div>
+<div class="result-value">{predicted_name}</div>
 </div>
 """,
                 unsafe_allow_html=True
@@ -1124,10 +1238,7 @@ if analyze:
             )
 
 
-        # ========================================================================================================
-        # PROBABILITIES
-        # ========================================================================================================
-
+        # 3. CLASS PROBABILITIES
         st.markdown(
             '<div class="section">Class Probabilities</div>',
             unsafe_allow_html=True
@@ -1166,12 +1277,36 @@ if analyze:
                 )
 
 
-        # ========================================================================================================
-        # GRAD-CAM
-        # ========================================================================================================
-
+        # 4. GRAD-CAM ANALYSIS
         st.markdown(
-            '<div class="section">AI Attention Map</div>',
+            '<div class="section">Grad-CAM Analysis</div>',
+            unsafe_allow_html=True
+        )
+        st.caption(
+            "Grad-CAM does not show the exact tumor boundary and is not a segmentation map. "
+            "It shows which regions influenced the model's classification decision."
+        )
+
+        cam_summaries = {}
+        attention_cols = st.columns(3, gap="medium")
+        for column, view_name in zip(
+            attention_cols,
+            ("axial", "coronal", "sagittal")
+        ):
+            image = processed_views[view_name]
+            cam = result["gradcam"][view_name]
+            cam_summaries[view_name] = gradcam_summary(image, cam)
+
+            with column:
+                fig = make_gradcam_overlay(image, cam)
+                overlay_png = figure_to_borderless_png(fig)
+                plt.close(fig)
+                st.image(overlay_png, width="stretch")
+                st.caption(f"{view_name.title()} attention")
+
+        # 6. GRAD-CAM COLOR LEGEND
+        st.markdown(
+            '<div class="section">Grad-CAM Color Legend</div>',
             unsafe_allow_html=True
         )
 
@@ -1179,483 +1314,176 @@ if analyze:
         st.markdown(
             """
 <div class="guard-info">
-<b>How to understand this heatmap</b><br><br>
-
-The heatmap shows <b>where the AI looked while making its prediction</b>.
-
-<br>🔴 <b>Red:</b> strongest influence on the prediction
-<br>🟡 <b>Yellow:</b> strong influence
-<br>🟢 <b>Green:</b> moderate influence
-<br>🔵 <b>Blue:</b> lower influence
-
-<br><br>
-A red or yellow area may overlap an important tumor-related region,
-but it does <b>not</b> mean that every red pixel is definitely tumor.
+🔴 <b>Red / dark red:</b> highest model attention; the region contributed strongly to the predicted class.<br>
+🟠 <b>Orange / yellow:</b> high model attention.<br>
+🟢 <b>Green:</b> moderate model attention.<br>
+🔵 <b>Blue:</b> low model attention.<br>
+⚫ <b>Dark / no heat:</b> very low model attention.<br><br>
+The model focused strongly on red and yellow regions. These colors do not confirm tumor tissue.
 </div>
 """,
             unsafe_allow_html=True
         )
 
-
-        st.caption(
-            "Grad-CAM explains model attention. It does not draw the exact tumor boundary."
-        )
-
-
-        g1, g2, g3 = st.columns(
-            3
-        )
-
-
-        items = [
-            (
-                g1,
-                "Axial",
-                processed_views["axial"],
-                result["gradcam"]["axial"]
-            ),
-            (
-                g2,
-                "Coronal",
-                processed_views["coronal"],
-                result["gradcam"]["coronal"]
-            ),
-            (
-                g3,
-                "Sagittal",
-                processed_views["sagittal"],
-                result["gradcam"]["sagittal"]
-            ),
-        ]
-
-
-        for column, title, image, cam in items:
-
-            with column:
-
-                fig = make_gradcam_overlay(
-                    image,
-                    cam
-                )
-
-                st.pyplot(
-                    fig,
-                    use_container_width=True
-                )
-
-                plt.close(
-                    fig
-                )
-
-                st.caption(
-                    f"{title} attention"
-                )
-
-
-        # ========================================================================================================
-        # CLINICAL EXPLANATION
-        # ========================================================================================================
-
+        # 7. PATIENT-SPECIFIC GRAD-CAM INTERPRETATION
         st.markdown(
-            '<div class="section">Clinical Information Influence</div>',
+            '<div class="section">Patient-Specific Grad-CAM Interpretation</div>',
+            unsafe_allow_html=True
+        )
+        for view_name, summary in cam_summaries.items():
+            st.markdown(
+                f"**{view_name.title()} view:** The strongest AI attention is located in the "
+                f"**{summary['location']} image region**. Red and yellow regions contributed most "
+                f"strongly to the predicted **{predicted_name}** class; green regions contributed "
+                f"moderately and blue regions had comparatively low influence. Within the visible "
+                f"MRI area, **{summary['high']:.1f}%** had high activation, "
+                f"**{summary['moderate']:.1f}%** moderate activation and "
+                f"**{summary['low']:.1f}%** low activation. This is an image-coordinate, "
+                "model-attention description, not confirmed anatomical localization."
+            )
+
+        # CLINICAL INFLUENCE
+        st.markdown(
+            '<div class="section">Clinical Influence</div>',
+            unsafe_allow_html=True
+        )
+        age_value = float(result["clinical_shapley"]["age_shap_logit"])
+        sex_value = float(result["clinical_shapley"]["sex_shap_logit"])
+        combined_value = age_value + sex_value
+
+        def simple_influence_status(value):
+            if value > 0.01:
+                return "Supports prediction"
+            if value < -0.01:
+                return "Opposes prediction"
+            return "Very small influence"
+
+        influence_col1, influence_col2 = st.columns(2, gap="medium")
+        with influence_col1:
+            st.metric("Age Influence", simple_influence_status(age_value))
+            st.caption(f"Shapley contribution: {age_value:+.4f}")
+        with influence_col2:
+            st.metric("Sex Influence", simple_influence_status(sex_value))
+            st.caption(f"Shapley contribution: {sex_value:+.4f}")
+
+        # 10–11. FEATURE-SPECIFIC SHAPLEY EXPLANATIONS
+        st.markdown("#### Age SHAP/Shapley explanation")
+        st.write(shapley_explanation("Age", age_value, predicted_name))
+        st.markdown("#### Sex SHAP/Shapley explanation")
+        st.write(shapley_explanation("Sex", sex_value, predicted_name))
+        st.caption(
+            "A positive value supports the current predicted class relative to the clinical baseline; "
+            "a negative value opposes it. These values explain model behavior and do not establish a diagnosis."
+        )
+
+        # 12. COMBINED CLINICAL INTERPRETATION
+        st.markdown(
+            '<div class="section">Combined Clinical Interpretation</div>',
+            unsafe_allow_html=True
+        )
+        age_direction = "supported" if age_value > 0.01 else "opposed" if age_value < -0.01 else "had minimal effect on"
+        sex_direction = "supported" if sex_value > 0.01 else "opposed" if sex_value < -0.01 else "had minimal effect on"
+        combined_description = (
+            "provided additional support" if combined_value > 0.01
+            else "slightly reduced support" if combined_value < -0.01
+            else "had a relatively small net effect"
+        )
+        st.write(
+            f"Age {age_direction} the predicted {predicted_name} class, while Sex {sex_direction} it. "
+            f"Together, the clinical information {combined_description}. The final prediction remained "
+            "primarily driven by MRI imaging features."
+        )
+        fig = make_clinical_influence_chart(age_value, sex_value)
+        st.pyplot(fig, width="stretch")
+        plt.close(fig)
+
+        # 13. OVERALL AI INTERPRETATION
+        st.markdown(
+            '<div class="section">Overall AI Interpretation</div>',
+            unsafe_allow_html=True
+        )
+        locations = ", ".join(
+            f"{name.title()}: {summary['location']}" for name, summary in cam_summaries.items()
+        )
+        st.write(
+            f"The AI model analyzed all three MRI views together with Age and Sex. It assigned the "
+            f"highest probability to **{predicted_name}** with **{confidence_percent:.2f}% confidence**. "
+            f"The strongest Grad-CAM attention occurred at these image-coordinate locations: {locations}. "
+            f"Age {age_direction} the predicted class and Sex {sex_direction} it. Overall, the model's "
+            "decision was primarily driven by MRI features, with clinical information providing a secondary influence."
+        )
+
+        # 14. PATIENT-FRIENDLY EXPLANATION
+        st.markdown(
+            '<div class="section">What This Result Means</div>',
+            unsafe_allow_html=True
+        )
+        st.write(
+            f"Your three MRI views were analyzed together with your Age and Sex information. The AI model "
+            f"found patterns most similar to the **{predicted_name}** class. Red and yellow areas show where "
+            "the AI focused most strongly. These highlighted areas are not confirmed tumor boundaries and "
+            "should be reviewed by a qualified medical specialist."
+        )
+
+        # 15. SUGGESTED NEXT STEPS
+        st.markdown(
+            '<div class="section">Suggested Next Steps</div>',
+            unsafe_allow_html=True
+        )
+        st.warning("This AI output is an assistive screening/research result and not a final diagnosis.")
+        st.markdown(
+            """
+- Show the complete original MRI study to a qualified radiologist; prefer original DICOM/NIfTI scans over screenshots.
+- Compare the study with previous MRI examinations when available.
+- Ask the clinician or radiologist to evaluate lesion location, size, enhancement pattern, edema and surrounding structures.
+- Additional contrast imaging or follow-up should be decided only by the treating clinician.
+- Histopathology, where clinically required, remains the definitive method for many tumor diagnoses.
+- Do not start, stop or change treatment based only on this AI dashboard.
+"""
+        )
+
+        # 16. MEDICAL DISCLAIMER
+        st.markdown(
+            '<div class="section">Medical Disclaimer</div>',
+            unsafe_allow_html=True
+        )
+        st.error(
+            "This system is developed for research and AI-assisted decision support. It is not a standalone "
+            "diagnostic tool and does not replace evaluation by a qualified radiologist, neurologist, "
+            "neurosurgeon, oncologist or other medical professional."
+        )
+
+        # 17. PRINTABLE REPORT
+        st.markdown(
+            '<div class="section">Printable Patient Report</div>',
             unsafe_allow_html=True
         )
 
-
-        age_value = float(
-            result[
-                "clinical_shapley"
-            ][
-                "age_shap_logit"
-            ]
+        report_pdf = build_patient_report(
+            age=age,
+            sex=sex,
+            predicted_name=predicted_name,
+            confidence=result["confidence"],
+            probabilities=result["probabilities"],
+            processed_views=processed_views,
+            gradcam=result["gradcam"],
+            cam_summaries=cam_summaries,
+            age_shapley=age_value,
+            sex_shapley=sex_value,
         )
 
-        sex_value = float(
-            result[
-                "clinical_shapley"
-            ][
-                "sex_shap_logit"
-            ]
+        st.download_button(
+            "Download / Print PDF Report",
+            data=report_pdf,
+            file_name="brain_tumor_ai_assessment_report.pdf",
+            mime="application/pdf",
+            type="primary",
+            width="stretch",
         )
 
-        combined_value = (
-            age_value
-            +
-            sex_value
-        )
-
-
-        # ========================================================================================================
-        # 1. KEEP THE PREVIOUS AGE / SEX INFLUENCE CARDS
-        # ========================================================================================================
-
-        def simple_influence_status(
-            value
-        ):
-
-            if value > 0.01:
-                return "Supports prediction"
-
-            elif value < -0.01:
-                return "Opposes prediction"
-
-            else:
-                return "Very small influence"
-
-
-        influence_col1, influence_col2 = st.columns(
-            2,
-            gap="medium"
-        )
-
-
-        with influence_col1:
-
-            st.metric(
-                "Age Influence",
-                simple_influence_status(
-                    age_value
-                )
-            )
-
-            st.caption(
-                f"Clinical contribution: {age_value:+.4f}"
-            )
-
-
-        with influence_col2:
-
-            st.metric(
-                "Sex Influence",
-                simple_influence_status(
-                    sex_value
-                )
-            )
-
-            st.caption(
-                f"Clinical contribution: {sex_value:+.4f}"
-            )
-
-
-        # ========================================================================================================
-        # 2. GRAPHICAL VIEW
-        # ========================================================================================================
-
-        st.markdown(
-            "#### Clinical Impact on Prediction"
-        )
-
-
-        labels = [
-            "Age",
-            "Sex"
-        ]
-
-        values = np.array(
-            [
-                age_value,
-                sex_value
-            ],
-            dtype=np.float32
-        )
-
-
-        max_abs = max(
-            float(
-                np.max(
-                    np.abs(
-                        values
-                    )
-                )
-            ),
-            0.01
-        )
-
-
-        fig, ax = plt.subplots(
-            figsize=(
-                8,
-                2.8
-            )
-        )
-
-
-        positions = np.arange(
-            len(
-                labels
-            )
-        )
-
-
-        bars = ax.barh(
-            positions,
-            values,
-            height=0.48
-        )
-
-
-        # Neutral reference
-        ax.axvline(
-            0,
-            linewidth=1.2,
-            alpha=0.8
-        )
-
-
-        ax.set_yticks(
-            positions
-        )
-
-        ax.set_yticklabels(
-            labels
-        )
-
-
-        ax.set_xlim(
-            -max_abs * 1.45,
-            max_abs * 1.45
-        )
-
-
-        ax.set_xlabel(
-            "Effect on predicted tumor class"
-        )
-
-
-        # Cleaner labels — no overlapping text
-        for bar, value in zip(
-            bars,
-            values
-        ):
-
-            text = f"{value:+.4f}"
-
-            offset = (
-                max_abs * 0.07
-            )
-
-            if value >= 0:
-
-                x = (
-                    float(value)
-                    +
-                    offset
-                )
-
-                align = "left"
-
-            else:
-
-                x = (
-                    float(value)
-                    -
-                    offset
-                )
-
-                align = "right"
-
-
-            ax.text(
-                x,
-                bar.get_y()
-                +
-                bar.get_height() / 2,
-                text,
-                va="center",
-                ha=align,
-                fontsize=10
-            )
-
-
-        ax.grid(
-            axis="x",
-            alpha=0.12
-        )
-
-
-        ax.spines[
-            "top"
-        ].set_visible(
-            False
-        )
-
-        ax.spines[
-            "right"
-        ].set_visible(
-            False
-        )
-
-
-        fig.tight_layout()
-
-
-        st.pyplot(
-            fig,
-            use_container_width=True
-        )
-
-        plt.close(
-            fig
-        )
-
-
-        # ========================================================================================================
-        # 3. HUMAN-FRIENDLY DYNAMIC EXPLANATIONS
-        # ========================================================================================================
-
-        predicted_name = (
-            result[
-                "predicted_class"
-            ]
-            .title()
-        )
-
-        confidence_percent = (
-            float(
-                result[
-                    "confidence"
-                ]
-            )
-            *
-            100.0
-        )
-
-
-        def feature_sentence(
-            feature_name,
-            value
-        ):
-
-            if value > 0.01:
-
-                return (
-                    f"**{feature_name}:** This information "
-                    f"supported the **{predicted_name}** prediction."
-                )
-
-            elif value < -0.01:
-
-                return (
-                    f"**{feature_name}:** This information reduced "
-                    f"support for the **{predicted_name}** prediction."
-                )
-
-            else:
-
-                return (
-                    f"**{feature_name}:** This information had very little "
-                    f"effect on the **{predicted_name}** prediction."
-                )
-
-
-        if combined_value > 0.01:
-
-            combined_sentence = (
-                f"Taken together, Age and Sex gave additional support "
-                f"to the **{predicted_name}** prediction."
-            )
-
-        elif combined_value < -0.01:
-
-            combined_sentence = (
-                f"Taken together, Age and Sex slightly reduced support "
-                f"for the **{predicted_name}** prediction."
-            )
-
-        else:
-
-            combined_sentence = (
-                f"Taken together, Age and Sex had only a small effect "
-                f"on the **{predicted_name}** prediction."
-            )
-
-
-        # ========================================================================================================
-        # 4. PARAGRAPH EXPLANATION
-        # ========================================================================================================
-
-        st.markdown(
-            "#### How the clinical information affected this result"
-        )
-
-
-        st.markdown(
-            f"""
-The model combined the three MRI views with the patient's **Age and Sex**.
-
-{feature_sentence("Age", age_value)}
-
-{feature_sentence("Sex", sex_value)}
-
-{combined_sentence}
-
-The final model prediction was **{predicted_name}** with
-**{confidence_percent:.2f}% confidence**. In this model, the MRI images
-provide the main diagnostic evidence, while Age and Sex can strengthen,
-weaken, or have very little effect on that image-based prediction.
-"""
-        )
-
-
-        # ========================================================================================================
-        # 5. PATIENT-SPECIFIC POINTS — NOT GRAPH INSTRUCTIONS
-        # ========================================================================================================
-
-        st.markdown(
-            "#### Clinical contribution summary"
-        )
-
-
-        age_point = (
-            "increased support"
-            if age_value > 0.01
-            else
-            "reduced support"
-            if age_value < -0.01
-            else
-            "made almost no difference"
-        )
-
-
-        sex_point = (
-            "increased support"
-            if sex_value > 0.01
-            else
-            "reduced support"
-            if sex_value < -0.01
-            else
-            "made almost no difference"
-        )
-
-
-        combined_point = (
-            "overall supported the MRI-based decision"
-            if combined_value > 0.01
-            else
-            "overall slightly opposed the MRI-based decision"
-            if combined_value < -0.01
-            else
-            "overall had minimal effect on the MRI-based decision"
-        )
-
-
-        st.markdown(
-            f"""
-- **Age {age_point}** for this prediction.
-- **Sex {sex_point}** for this prediction.
-- Together, the clinical information **{combined_point}**.
-- The final result still considers **all three MRI views + Age + Sex together**.
-"""
-        )
-
-
-        # ========================================================================================================
-        # 6. SIMPLE INFORMATION NOTE
-        # ========================================================================================================
-
-        st.info(
-            "Clinical information does not make a separate diagnosis. "
-            "It modifies the evidence coming from the MRI images as part of the final combined prediction."
+        st.caption(
+            "Open the downloaded PDF and use your device's Print command. "
+            "The report includes natural-language explanations for patients and clinicians."
         )
 
 
