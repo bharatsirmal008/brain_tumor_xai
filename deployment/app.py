@@ -42,6 +42,7 @@ from deployment.input_guard import (
 )
 
 from deployment.report_generator import build_patient_report
+from deployment.screening import run_binary_screening
 
 
 # ================================================================================================================
@@ -59,87 +60,507 @@ st.set_page_config(
 st.markdown(
     """
 <style>
+:root {
+    --ink: #102a43;
+    --muted: #627d98;
+    --navy: #0b2741;
+    --navy-2: #123e5f;
+    --teal: #00a6a6;
+    --teal-dark: #007f82;
+    --cyan: #35d0ba;
+    --surface: rgba(255, 255, 255, 0.88);
+    --surface-solid: #ffffff;
+    --line: #d9e7ef;
+    --soft: #eef7fa;
+    --success: #0b8f6a;
+    --shadow: 0 18px 50px rgba(16, 42, 67, 0.10);
+}
+
+html, body, [class*="css"] {
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.stApp {
+    color: var(--ink);
+    color-scheme: light;
+    background:
+        radial-gradient(circle at 10% 0%, rgba(53, 208, 186, .14), transparent 28rem),
+        radial-gradient(circle at 92% 12%, rgba(46, 134, 193, .12), transparent 30rem),
+        linear-gradient(180deg, #f7fbfd 0%, #eef6fa 100%);
+}
+
+[data-testid="stHeader"] {
+    background: rgba(247, 251, 253, .78) !important;
+    backdrop-filter: blur(14px);
+    border-bottom: 1px solid rgba(217, 231, 239, .72);
+}
+
+[data-testid="stToolbar"] button,
+[data-testid="stToolbar"] span {
+    color: var(--navy) !important;
+}
 
 .block-container {
-    max-width: 1250px;
-    padding-top: 2rem;
-    padding-bottom: 3rem;
+    max-width: 1240px;
+    padding-top: 1.3rem;
+    padding-bottom: 4rem;
+}
+
+.hero-shell {
+    position: relative;
+    overflow: hidden;
+    padding: 2.25rem 2.4rem 2rem;
+    margin-bottom: 1.2rem;
+    color: white;
+    border: 1px solid rgba(255,255,255,.18);
+    border-radius: 28px;
+    background: linear-gradient(125deg, #09243c 0%, #0b4962 58%, #008d8e 100%);
+    box-shadow: 0 24px 65px rgba(10, 55, 80, .22);
+    animation: rise-in .55s ease-out both;
+}
+
+.hero-shell::after {
+    content: "";
+    position: absolute;
+    width: 290px;
+    height: 290px;
+    right: -75px;
+    top: -115px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(91, 236, 210, .38), rgba(91, 236, 210, 0) 68%);
+    pointer-events: none;
+}
+
+.hero-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: .5rem;
+    padding: .38rem .7rem;
+    margin-bottom: .85rem;
+    border: 1px solid rgba(255,255,255,.24);
+    border-radius: 999px;
+    background: rgba(255,255,255,.10);
+    font-size: .73rem;
+    font-weight: 750;
+    letter-spacing: .08em;
+    text-transform: uppercase;
 }
 
 .hero-title {
-    font-size: 2.55rem;
-    font-weight: 760;
-    letter-spacing: -0.04rem;
-    margin-bottom: 0.15rem;
+    max-width: 760px;
+    font-size: clamp(2rem, 4vw, 3.35rem);
+    line-height: 1.02;
+    font-weight: 800;
+    letter-spacing: -.055em;
+    margin: 0 0 .75rem;
 }
 
 .hero-subtitle {
-    opacity: 0.68;
-    margin-bottom: 2rem;
+    max-width: 720px;
+    margin: 0;
+    color: rgba(255,255,255,.78);
+    font-size: 1.02rem;
+    line-height: 1.65;
+}
+
+.workflow-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: .8rem;
+    margin: 0 0 1.2rem;
+}
+
+.workflow-step {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    padding: .85rem 1rem;
+    border: 1px solid rgba(185, 211, 224, .78);
+    border-radius: 16px;
+    background: rgba(255,255,255,.68);
+    backdrop-filter: blur(10px);
+    box-shadow: 0 8px 24px rgba(16,42,67,.05);
+}
+
+.workflow-step span {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 10px;
+    color: white;
+    background: linear-gradient(135deg, var(--teal), var(--cyan));
+    font-size: .78rem;
+    font-weight: 800;
+}
+
+.workflow-step div {
+    color: var(--ink);
+    font-size: .88rem;
+    font-weight: 720;
 }
 
 .section {
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    color: var(--navy);
     font-size: 1.35rem;
-    font-weight: 720;
-    margin-top: 1.5rem;
-    margin-bottom: 0.8rem;
+    font-weight: 780;
+    letter-spacing: -.025em;
+    margin-top: 2rem;
+    margin-bottom: .8rem;
+}
+
+.section::before {
+    content: "";
+    width: 9px;
+    height: 26px;
+    border-radius: 99px;
+    background: linear-gradient(180deg, var(--cyan), var(--teal-dark));
+    box-shadow: 0 0 0 5px rgba(0,166,166,.08);
+}
+
+p, label {
+    color: #48657d;
+}
+
+[data-testid="stCaptionContainer"],
+[data-testid="stCaptionContainer"] p {
+    color: #56738a !important;
+    opacity: 1 !important;
+    font-weight: 520;
+    line-height: 1.55;
+}
+
+[data-testid="stWidgetLabel"] p,
+[data-testid="stNumberInput"] label p,
+[data-testid="stSelectbox"] label p,
+[data-testid="stFileUploader"] label p {
+    color: var(--navy) !important;
+    opacity: 1 !important;
+    font-weight: 720 !important;
+}
+
+[data-testid="stFileUploader"] {
+    padding: .35rem;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--surface);
+    box-shadow: 0 10px 30px rgba(16,42,67,.06);
+    transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+
+[data-testid="stFileUploader"]:hover {
+    transform: translateY(-2px);
+    border-color: rgba(0,166,166,.55);
+    box-shadow: 0 16px 36px rgba(16,42,67,.10);
+}
+
+[data-testid="stFileUploaderDropzone"] {
+    min-height: 128px;
+    border: 1.5px dashed #9fc7d5 !important;
+    border-radius: 14px !important;
+    background: linear-gradient(145deg, #f7fcfd, #edf8fa) !important;
+}
+
+[data-testid="stFileUploaderDropzone"] button {
+    color: var(--teal-dark) !important;
+    border-color: #9bcfd2 !important;
+    background: white !important;
+    box-shadow: 0 6px 15px rgba(0,127,130,.10) !important;
+}
+
+[data-testid="stFileUploaderDropzone"] button p,
+[data-testid="stFileUploaderDropzone"] button span,
+[data-testid="stFileUploaderDropzone"] button svg {
+    color: var(--teal-dark) !important;
+    fill: var(--teal-dark) !important;
+    opacity: 1 !important;
+}
+
+[data-testid="stFileUploaderDropzone"] button:hover {
+    color: white !important;
+    border-color: var(--teal-dark) !important;
+    background: var(--teal-dark) !important;
+}
+
+[data-testid="stFileUploaderDropzone"] button:hover p,
+[data-testid="stFileUploaderDropzone"] button:hover span,
+[data-testid="stFileUploaderDropzone"] button:hover svg {
+    color: white !important;
+    fill: white !important;
+}
+
+[data-testid="stFileUploaderDropzoneInstructions"] > div > span,
+[data-testid="stFileUploaderDropzoneInstructions"] small {
+    color: #45657b !important;
+    opacity: 1 !important;
+}
+
+div[data-baseweb="input"], div[data-baseweb="select"] > div {
+    min-height: 48px;
+    border-color: var(--line) !important;
+    border-radius: 13px !important;
+    color: var(--ink) !important;
+    background-color: rgba(255,255,255,.96) !important;
+    box-shadow: 0 5px 18px rgba(16,42,67,.045);
+}
+
+div[data-baseweb="input"] input,
+div[data-baseweb="select"] span,
+div[data-baseweb="select"] svg {
+    color: var(--ink) !important;
+    fill: var(--ink) !important;
+    -webkit-text-fill-color: var(--ink) !important;
+}
+
+[data-testid="stNumberInput"] div[data-baseweb="input"],
+[data-testid="stNumberInput"] div[data-baseweb="input"] > div,
+[data-testid="stNumberInput"] input,
+[data-testid="stSelectbox"] div[data-baseweb="select"],
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+[data-testid="stSelectbox"] [role="combobox"] {
+    color: var(--ink) !important;
+    background: #ffffff !important;
+    -webkit-text-fill-color: var(--ink) !important;
+}
+
+[data-testid="stNumberInput"] div[data-baseweb="input"]:hover,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div:hover {
+    border-color: #79bec4 !important;
+    box-shadow: 0 7px 20px rgba(0,127,130,.10) !important;
+}
+
+[data-testid="stNumberInput"] div[data-baseweb="input"]:focus-within,
+[data-testid="stSelectbox"] div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--teal) !important;
+    outline: none !important;
+    box-shadow: 0 0 0 3px rgba(0,166,166,.16) !important;
+}
+
+div[data-baseweb="input"] button {
+    color: var(--teal-dark) !important;
+    background: transparent !important;
+}
+
+div[data-baseweb="input"]:focus-within, div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--teal) !important;
+    box-shadow: 0 0 0 3px rgba(0,166,166,.12) !important;
+}
+
+[data-testid="stCheckbox"] {
+    padding: .62rem .78rem;
+    margin-bottom: .38rem;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: rgba(255,255,255,.68);
+    transition: background .2s ease, border-color .2s ease;
+}
+
+[data-testid="stCheckbox"]:hover {
+    border-color: #9bcfd2;
+    background: rgba(255,255,255,.95);
+}
+
+[data-testid="stCheckbox"] label,
+[data-testid="stCheckbox"] label p,
+[data-testid="stCheckbox"] span {
+    color: #294b63 !important;
+    opacity: 1 !important;
 }
 
 .result-card {
-    border: 1px solid rgba(128,128,128,.22);
-    border-radius: 18px;
-    padding: 22px;
-    background: rgba(128,128,128,.045);
+    min-height: 132px;
+    border: 1px solid rgba(130, 190, 205, .45);
+    border-radius: 22px;
+    padding: 23px 24px;
+    color: white;
+    background: linear-gradient(135deg, var(--navy) 0%, var(--navy-2) 100%);
+    box-shadow: 0 16px 38px rgba(11,39,65,.16);
+    animation: rise-in .45s ease-out both;
 }
 
 .result-label {
-    opacity: .64;
-    font-size: .88rem;
+    color: rgba(255,255,255,.65);
+    font-size: .76rem;
+    font-weight: 750;
+    letter-spacing: .08em;
+    text-transform: uppercase;
 }
 
 .result-value {
-    font-size: 2.0rem;
-    font-weight: 760;
-    margin-top: .25rem;
+    color: white;
+    font-size: clamp(1.55rem, 3vw, 2.15rem);
+    line-height: 1.18;
+    font-weight: 790;
+    margin-top: .5rem;
+}
+
+.guard-pass, .guard-info {
+    border-radius: 15px;
+    padding: 13px 15px;
+    line-height: 1.55;
 }
 
 .guard-pass {
-    border-radius: 12px;
-    padding: 10px 14px;
-    background: rgba(50,180,100,.10);
-    border: 1px solid rgba(50,180,100,.22);
+    color: #05664f;
+    background: #e9f8f2;
+    border: 1px solid #a9decf;
 }
 
 .guard-info {
-    border-radius: 12px;
-    padding: 10px 14px;
-    background: rgba(60,130,220,.09);
-    border: 1px solid rgba(60,130,220,.20);
+    color: #164e63;
+    background: #edf8fb;
+    border: 1px solid #b9dfe8;
 }
 
-.footer {
-    text-align:center;
-    opacity:.50;
-    font-size:.78rem;
-    padding-top:1rem;
+[data-testid="stAlert"] {
+    border-radius: 15px;
+    border-width: 1px;
 }
 
-.stButton > button {
-    border-radius: 12px;
-    min-height: 48px;
-    font-weight: 650;
+.stButton > button, [data-testid="stDownloadButton"] > button {
+    min-height: 50px;
+    border: 0 !important;
+    border-radius: 14px !important;
+    color: white !important;
+    font-weight: 760 !important;
+    letter-spacing: .01em;
+    background: linear-gradient(110deg, #008d8e, #00b89c) !important;
+    box-shadow: 0 12px 28px rgba(0,141,142,.23) !important;
+    transition: transform .18s ease, box-shadow .18s ease, filter .18s ease !important;
+}
+
+.stButton > button p,
+.stButton > button span,
+[data-testid="stDownloadButton"] > button p,
+[data-testid="stDownloadButton"] > button span {
+    color: white !important;
+    opacity: 1 !important;
+}
+
+.stButton > button:hover, [data-testid="stDownloadButton"] > button:hover {
+    transform: translateY(-2px);
+    filter: saturate(1.08) brightness(1.03);
+    box-shadow: 0 16px 34px rgba(0,141,142,.30) !important;
+}
+
+.stButton > button:hover p,
+.stButton > button:hover span,
+[data-testid="stDownloadButton"] > button:hover p,
+[data-testid="stDownloadButton"] > button:hover span,
+.stButton > button:focus p,
+[data-testid="stDownloadButton"] > button:focus p {
+    color: white !important;
+    opacity: 1 !important;
+}
+
+.stButton > button:disabled {
+    color: #375b70 !important;
+    border: 1px solid #b9cdd8 !important;
+    background: #dce9ee !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+}
+
+.stButton > button:disabled p,
+.stButton > button:disabled span {
+    color: #375b70 !important;
+    opacity: 1 !important;
 }
 
 [data-testid="stMetric"] {
-    border: 1px solid rgba(128,128,128,.18);
-    padding: 15px;
-    border-radius: 14px;
+    min-height: 108px;
+    padding: 16px 17px;
+    border: 1px solid var(--line);
+    border-radius: 17px;
+    background: var(--surface);
+    box-shadow: 0 10px 28px rgba(16,42,67,.06);
+}
+
+[data-testid="stMetricLabel"] p {
+    color: var(--muted);
+    font-size: .78rem;
+    font-weight: 730;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+}
+
+[data-testid="stMetricValue"] {
+    color: var(--navy);
+    font-weight: 780;
+}
+
+[data-testid="stProgress"] > div > div {
+    background: linear-gradient(90deg, var(--teal-dark), var(--cyan)) !important;
 }
 
 [data-testid="stImage"] img {
     border: none !important;
     outline: none !important;
-    box-shadow: none !important;
+    border-radius: 17px;
+    box-shadow: 0 14px 34px rgba(16,42,67,.12);
+}
+
+[data-testid="stSlider"] [role="slider"] {
+    background: var(--teal) !important;
+    border-color: white !important;
+    box-shadow: 0 0 0 4px rgba(0,166,166,.15);
+}
+
+hr {
+    border-color: var(--line) !important;
+}
+
+.footer {
+    text-align: center;
+    color: #48657d;
+    font-size: .78rem;
+    font-weight: 560;
+    padding-top: 1.2rem;
+}
+
+@keyframes rise-in {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 760px) {
+    .block-container { padding: .8rem .8rem 3rem; }
+    .hero-shell { padding: 1.55rem 1.35rem; border-radius: 22px; }
+    .workflow-strip { grid-template-columns: 1fr; }
+    .workflow-step { padding: .7rem .8rem; }
+    .section { margin-top: 1.55rem; }
+
+    [data-testid="stHorizontalBlock"] {
+        flex-direction: column !important;
+        gap: .85rem !important;
+    }
+
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+
+    [data-testid="stFileUploaderDropzone"] {
+        min-height: 112px;
+    }
+
+    .result-card {
+        min-height: auto;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+        scroll-behavior: auto !important;
+    }
 }
 
 </style>
@@ -149,14 +570,21 @@ st.markdown(
 
 
 st.markdown(
-    '<div class="hero-title">🧠 Brain Tumor XAI</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="hero-subtitle">'
-    'Multi-angle MRI classification with image and clinical explanations'
-    '</div>',
+    """
+<section class="hero-shell">
+    <div class="hero-badge">✦ Explainable medical AI</div>
+    <div class="hero-title">Brain Tumor XAI</div>
+    <p class="hero-subtitle">
+        Analyze three MRI perspectives with clinical context, transparent model attention,
+        and a patient-friendly printable report.
+    </p>
+</section>
+<div class="workflow-strip">
+    <div class="workflow-step"><span>01</span><div>Upload three MRI views</div></div>
+    <div class="workflow-step"><span>02</span><div>Verify patient information</div></div>
+    <div class="workflow-step"><span>03</span><div>Review prediction and XAI</div></div>
+</div>
+""",
     unsafe_allow_html=True
 )
 
@@ -289,7 +717,8 @@ def anatomy_alpha_mask(image):
 
 def make_gradcam_overlay(
     image,
-    raw_cam
+    raw_cam,
+    overlay_opacity=0.55
 ):
     """
     Previous-style smooth Grad-CAM visualization.
@@ -335,8 +764,16 @@ def make_gradcam_overlay(
     #
     # This restores the full blue-green-yellow-red map
     # instead of showing only tiny red patches.
+    overlay_opacity = float(
+        np.clip(
+            overlay_opacity,
+            0.0,
+            0.85
+        )
+    )
+
     alpha_map = (
-        0.55
+        overlay_opacity
         *
         anatomy
     )
@@ -381,7 +818,7 @@ def make_gradcam_overlay(
         cam
     )
 
-    if np.any(
+    if overlay_opacity >= 0.10 and np.any(
         (
             cam >= 0.60
         )
@@ -443,6 +880,45 @@ def figure_to_borderless_png(fig):
     )
     output.seek(0)
     return output.getvalue()
+
+
+@st.fragment
+def render_gradcam_comparison(processed_views, gradcam):
+    """Interactive display-only comparison that does not rerun inference."""
+    overlay_percent = st.slider(
+        "Original MRI ↔ Grad-CAM overlay",
+        min_value=0,
+        max_value=85,
+        value=55,
+        step=5,
+        help=(
+            "Move to 0% to see the original processed MRI. Move right to increase "
+            "the visibility of the Grad-CAM attention colors."
+        ),
+        key="gradcam_overlay_percent",
+    )
+    st.caption(
+        f"Current view: {'original MRI only' if overlay_percent == 0 else f'{overlay_percent}% attention overlay'}. "
+        "This control changes only the display, not the prediction or Grad-CAM values."
+    )
+
+    attention_cols = st.columns(3, gap="medium")
+    for column, view_name in zip(
+        attention_cols,
+        ("axial", "coronal", "sagittal")
+    ):
+        with column:
+            fig = make_gradcam_overlay(
+                processed_views[view_name],
+                gradcam[view_name],
+                overlay_opacity=overlay_percent / 100.0
+            )
+            overlay_png = figure_to_borderless_png(fig)
+            plt.close(fig)
+            st.image(overlay_png, width="stretch")
+            st.caption(
+                f"{view_name.title()} {'MRI' if overlay_percent == 0 else 'attention'}"
+            )
 
 
 def make_mri_figure(image):
@@ -715,6 +1191,11 @@ st.markdown(
     unsafe_allow_html=True
 )
 
+st.caption(
+    "Upload one clear, correctly oriented image for each anatomical plane. "
+    "Supported formats: PNG, JPG, BMP, and TIFF."
+)
+
 
 u1, u2, u3 = st.columns(
     3,
@@ -773,6 +1254,10 @@ with u3:
 st.markdown(
     '<div class="section">Clinical Information</div>',
     unsafe_allow_html=True
+)
+
+st.caption(
+    "Clinical context is combined with the three MRI views during inference."
 )
 
 
@@ -872,6 +1357,10 @@ if all_files:
 st.markdown(
     '<div class="section">Input Verification</div>',
     unsafe_allow_html=True
+)
+
+st.caption(
+    "Complete these checks to confirm that all inputs belong to the same study."
 )
 
 
@@ -1151,9 +1640,25 @@ if analyze:
             )
 
             st.write(
-                "Running final classification model..."
+                "Running experimental Tumor / No-Tumor screening..."
             )
 
+            screening = run_binary_screening(processed_views)
+            st.write("Stage-1 Tumor score:", f"{screening['tumor_probability']:.2%}")
+            st.caption(
+                "Experimental screening only. Not clinically validated; "
+                "the training datasets contain source-related confounding."
+            )
+            if not screening["screen_positive"]:
+                status.update(label="Screening complete", state="complete", expanded=True)
+                st.info(
+                    "Research screening result: NO TUMOR pattern detected. "
+                    "The four-class model and Grad-CAM were not run."
+                )
+                st.warning("This does not rule out a tumor. Clinical assessment is required.")
+                st.stop()
+
+            st.write("Tumor screen positive: running classification and explanations.")
 
             result = predict_patient(
                 model=model,
@@ -1187,7 +1692,8 @@ if analyze:
 
 
         predicted_name = result["predicted_class"].title()
-        confidence_percent = float(result["confidence"]) * 100.0
+        confidence = float(result["confidence"])
+        confidence_percent = confidence * 100.0
 
         # 1. PATIENT INPUT SUMMARY
         st.markdown(
@@ -1288,21 +1794,15 @@ if analyze:
         )
 
         cam_summaries = {}
-        attention_cols = st.columns(3, gap="medium")
-        for column, view_name in zip(
-            attention_cols,
-            ("axial", "coronal", "sagittal")
-        ):
+        for view_name in ("axial", "coronal", "sagittal"):
             image = processed_views[view_name]
             cam = result["gradcam"][view_name]
             cam_summaries[view_name] = gradcam_summary(image, cam)
 
-            with column:
-                fig = make_gradcam_overlay(image, cam)
-                overlay_png = figure_to_borderless_png(fig)
-                plt.close(fig)
-                st.image(overlay_png, width="stretch")
-                st.caption(f"{view_name.title()} attention")
+        render_gradcam_comparison(
+            processed_views,
+            result["gradcam"]
+        )
 
         # 6. GRAD-CAM COLOR LEGEND
         st.markdown(
