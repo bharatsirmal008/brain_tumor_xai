@@ -3,3 +3,10 @@ __pycache__/
 *.py[cod]
 .env
 .streamlit/
+
+deployment/*.before_*.py
+deployment/*.before-*.py
+deployment/*before_p*.py
+data/
+dashboard_test/
+dashboard_notumor_unseen_5/
