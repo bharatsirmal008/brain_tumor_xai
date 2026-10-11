@@ -7,7 +7,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, KeepTogether
 
 GRADCAM_GUIDE = (
     'The model provides a separate attention map for each MRI view. Red and yellow show stronger '
@@ -55,21 +55,40 @@ def interpretation(screening, result=None):
 
 
 def next_steps(screening, result=None, warnings=()):
-    steps = [
-        ('Share this positive screening result with a qualified clinician or radiologist for review.'
-         if screening['screen_positive'] else
-         'Continue the clinical review recommended by your healthcare professional. A negative screen does not rule out disease.'),
-        'Review the full original MRI study and clinical history together; do not rely on these three images alone.',
-        'Check image clarity, correct view placement, patient/study consistency, age, and sex before relying on the output.',
-        'If confidence is low, class scores are close, or results conflict with other findings, request expert review. Confidence is not a diagnosis probability.',
-        'Discuss appropriate next steps with your clinician. Do not start, stop, or change treatment based on this research output.',
-    ]
+    """Suggestions follow the completed screening branch and available explanations."""
+    if not screening['screen_positive']:
+        steps = [
+            'The model did not flag a tumor in these views. If symptoms persist or your clinician remains concerned, seek review of the full MRI study; this negative screen does not rule out disease.',
+            'Continue any follow-up already recommended by your clinician. Do not cancel an appointment or planned evaluation because of this result.',
+            'Tumor-type classification and explanations were skipped. Share the screening-only report with your clinician if you discuss this result.',
+        ]
+    elif result is None:
+        steps = [
+            'The screening model flagged a possible tumor pattern. Arrange review of the complete MRI study with a qualified clinician or radiologist.',
+            'Tumor-type classification did not complete. No tumor type can be inferred from this screening result; retry the analysis if appropriate and share the screening report for review.',
+            'A positive screen is not a confirmed diagnosis. Let your clinician decide what further evaluation is appropriate.',
+        ]
+    else:
+        predicted = result['predicted_class'].title()
+        steps = [
+            f'The model favored {predicted} after a positive screen. Ask a qualified clinician or radiologist to review this suggestion alongside the complete MRI study and clinical history.',
+            'Discuss the predicted type and all four class scores with your clinician, especially if the result conflicts with other findings. Model confidence is not a diagnosis probability.',
+        ]
+        if result.get('gradcam') and result.get('clinical_shapley'):
+            steps.append('Share the attention maps and age/sex contributions with the reviewer to discuss what influenced this prediction. These explanations do not confirm tumor boundaries or causes.')
+        elif result.get('gradcam'):
+            steps.append('Share the available attention maps for review. Clinical contributions were not generated; do not interpret missing explanations as a normal finding.')
+        elif result.get('clinical_shapley'):
+            steps.append('Share the available age/sex contributions for review. Attention maps were not generated, so no image-region explanation is available.')
+        else:
+            steps.append('The classification is available, but its explanations were not generated. Share the available result and note this limitation; retry explanation generation if needed.')
+        steps.append('Discuss further evaluation with your clinician. Do not start, stop, or change treatment based on the predicted tumor type alone.')
     if warnings:
-        steps.insert(0, 'Input quality warnings were recorded. Review and correct the inputs before interpreting the result.')
+        steps.insert(0, 'Review the input warnings shown above and correct image quality or supplied details before interpreting this result. Rerun analysis after corrections.')
     return steps
 
 
-REPORT_VERSION = "template-no-id-v1"
+REPORT_VERSION = "template-no-id-v2-outcome-suggestions"
 
 
 def build_research_report(*, saved, original_images, overlay_images):
@@ -180,9 +199,13 @@ def build_research_report(*, saved, original_images, overlay_images):
     add('User confirmed the same patient/study, correct view slots, and matching age and sex. Automatic technical checks passed; they cannot establish patient identity.')
     for warning in saved.get('warnings',[]): add('Input warning: '+warning)
     if saved.get('error'): add('Execution note: '+saved['error'])
+    review_start = len(story)
     add('Suggested Next Steps','Heading2')
-    add('Share the full MRI study and this report with a qualified clinician or radiologist. Check image quality and supplied inputs. If findings conflict or confidence is low, request expert review. Do not change treatment based on this research output.')
+    for i, step in enumerate(next_steps(screening, result, saved.get('warnings', [])), 1):
+        add(f'{i}. {step}')
     add('Limitations','Heading2');add(LIMITATIONS)
+    review_content = story[review_start:]
+    story[review_start:] = [KeepTogether(review_content)]
     def footer(canvas,document):
         canvas.setFont('Helvetica',7)
         canvas.setFillColor(colors.HexColor('#596773'))

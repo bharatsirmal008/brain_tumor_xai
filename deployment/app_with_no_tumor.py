@@ -12,6 +12,7 @@ import os
 
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 import matplotlib.pyplot as plt
 
 from scipy.ndimage import (
@@ -58,7 +59,7 @@ from deployment.research_report import (
 # ================================================================================================================
 
 st.set_page_config(
-    page_title="Brain Tumor XAI",
+    page_title="BraintumorXAI",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -69,7 +70,7 @@ st.set_page_config(
 st.markdown("<style>" + (Path(__file__).parent / "assets/dashboard.css").read_text(encoding="utf-8") + "</style>", unsafe_allow_html=True)
 st.markdown("""
 <header class="app-header"><div class="brand"><span class="brain-mark" aria-hidden="true">🧠</span><div>
-<h1>Brain Tumor XAI</h1><p>Multi-angle MRI classification with image and clinical explanations</p></div></div></header>
+<h1>BraintumorXAI</h1><p>Multi-angle MRI classification with image and clinical explanations</p></div></div></header>
 """, unsafe_allow_html=True)
 
 # ================================================================================================================
@@ -582,6 +583,11 @@ def influence_label(
 
 
 
+# The bundled React component is served locally; no external scripts or patient uploads.
+ai_analyze_button = components.declare_component(
+    "ai_analyze_button", path=str(Path(__file__).parent / "ai_analyze_button" / "dist")
+)
+
 # UI orchestration only: all inference and input checks use the original functions.
 VIEW_NAMES = ("axial", "coronal", "sagittal")
 STEPS = ("Input Validation", "Stage-1 Screening", "Stage-2 Classification", "Explainability")
@@ -638,8 +644,8 @@ with left:
         with age_column:
             age = st.number_input("Age (years)", min_value=1, max_value=110, value=59, step=1)
         with sex_column:
-            sex = st.selectbox("Sex", ["female", "male"], format_func=str.title)
-        st.caption("ⓘ Age and Sex contribute to the multimodal model and its interpretation.")
+            sex = st.selectbox("Gender", ["female", "male"], format_func=str.title)
+        st.caption("ⓘ Age and Gender contribute to the multimodal model and its interpretation.")
 
     with st.container(border=False, key="preview_panel"):
         section("03", "Uploaded MRI Preview", "Verify the original uploaded images before analysis.")
@@ -675,7 +681,7 @@ with left:
                 st.session_state[key] = False
         same_patient_confirm = st.checkbox("I confirm that the Axial, Coronal, and Sagittal MRI views belong to the same patient and study.", key="confirm_patient")
         orientation_confirm = st.checkbox("I confirm that each MRI was uploaded into its correct view slot.", key="confirm_orientation")
-        clinical_confirm = st.checkbox("I confirm that Age and Sex belong to the same patient as the uploaded MRI views.", key="confirm_clinical")
+        clinical_confirm = st.checkbox("I confirm that Age and Gender belong to the same patient as the uploaded MRI views.", key="confirm_clinical")
 
 all_files = all(file is not None for file in files.values())
 hard_errors = []
@@ -837,7 +843,17 @@ with left:
         ready = all_files and not hard_errors and same_patient_confirm and orientation_confirm and clinical_confirm
         if all_files and not hard_errors and not ready:
             st.caption("Complete all three confirmations to enable analysis.")
-        analyze = st.button("🔬 Analyze MRI", type="primary", use_container_width=True, disabled=not ready)
+        previous_analysis = st.session_state.get("study_analysis", {})
+        request_id = ai_analyze_button(
+            ready=bool(ready), input_key=input_key,
+            request_id=previous_analysis.get("request_id"),
+            outcome=previous_analysis.get("button_outcome"),
+            key="ai_analyze_button", default=None,
+        )
+        analyze = bool(ready and request_id and request_id != st.session_state.get("handled_analysis_request"))
+        if request_id:
+            # Consume each click once, even if inputs change or the page reruns.
+            st.session_state.handled_analysis_request = request_id
 
 
 
@@ -856,6 +872,7 @@ with right:
                 "states": ["Completed", "Running", "Not Started", "Not Started"],
                 "analyzed_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
                 "age": int(age), "sex": sex, "warnings": list(warnings),
+                "request_id": request_id,
             }
             st.session_state.study_analysis = saved
             states = saved["states"]
@@ -901,6 +918,9 @@ with right:
                     "Model inference failed. Check checkpoint availability and the server environment, then retry analysis."
                 )
             status_slot.markdown(workflow(states), unsafe_allow_html=True)
+            saved["button_outcome"] = "error" if saved.get("error") else "success"
+            # Send completion to React; the consumed request cannot trigger a second inference.
+            st.rerun()
 
         if saved and saved.get("error"):
             st.error(saved["error"])
@@ -1023,7 +1043,7 @@ with right:
             st.markdown("### Understanding your result")
             report_result = saved.get("result") if positive else None
             st.write(interpretation(screening, report_result))
-            st.markdown("#### Suggested next steps")
+            st.markdown("#### Suggested next steps — Tumor Detected" if positive else "#### Suggested next steps — No Tumor Detected")
             for step in next_steps(screening, report_result, saved.get("warnings", [])):
                 st.write("• " + step)
 
@@ -1068,4 +1088,4 @@ st.markdown(
     'oncologist or other medical professional.'
     '</div></section>', unsafe_allow_html=True,
 )
-st.markdown('<div class="footer">Brain Tumor XAI · Research prototype · Not intended for clinical diagnosis</div>', unsafe_allow_html=True)
+st.markdown('<div class="footer">BraintumorXAI · Research prototype · Not intended for clinical diagnosis</div>', unsafe_allow_html=True)

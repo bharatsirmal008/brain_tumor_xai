@@ -1,6 +1,7 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
 
 :root { color-scheme: dark; --ink:#F3F7FF; --muted:#AAC8E1; --line:#29475e; }
-.stApp { background:#071323; color:var(--ink); font-family:Inter,"Segoe UI",sans-serif; }
+.stApp { background:#071323; color:var(--ink); font-family:"DM Sans",sans-serif; font-optical-sizing:auto; }
 
 [data-testid="stHeader"] { background:#071323ee; }
 .app-header { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:10px 0 25px; border-bottom:1px solid var(--line); }
@@ -210,3 +211,35 @@ a:focus-visible, button:focus-visible, input:focus-visible { outline-color:#62D8
 .medical-disclaimer h2 { color:#F3F7FF; font-size:28px; font-weight:700; line-height:1.3; padding:0; margin:0 0 24px; }
 .medical-disclaimer-card { background:#412328; color:#FF6468; border-radius:12px; padding:24px; font-size:20px; line-height:1.7; overflow-wrap:break-word; }
 @media(max-width:640px) { .medical-disclaimer h2 { font-size:23px; margin-bottom:18px; } .medical-disclaimer-card { padding:18px; font-size:16px; } }
+
+/* Project typography and matching clinical control surfaces. */
+.stApp, .stApp :is(h1,h2,h3,h4,h5,h6,p,label,input,button,textarea,select), [data-baseweb="select"], [role="listbox"] { font-family:"DM Sans",sans-serif !important; font-optical-sizing:auto; }
+[data-testid="stNumberInputContainer"], [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stSelectbox"] [role="combobox"] { background-color:#173253 !important; border-color:#2B4563 !important; color:#F3F7FF; }
+[data-testid="stSelectbox"] [data-baseweb="select"] > div > div { background-color:transparent !important; }
+
+/* Match legacy and React Aria select controls to the Age field. */
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div div,
+[data-testid="stSelectbox"] div:has(> input[role="combobox"]),
+[data-testid="stSelectbox"] input[role="combobox"],
+[data-testid="stSelectbox"] button {
+  background-color:#173253 !important;
+  color:#F3F7FF !important;
+}
+[data-testid="stSelectbox"] div:has(> input[role="combobox"]) { border-color:#2B4563 !important; }
+[data-testid="stSelectbox"] div:has(> input[role="combobox"]):focus-within { border-color:#6FA3D8 !important; }
+[data-testid="stSelectboxVirtualDropdown"],
+[data-testid="stSelectboxVirtualDropdown"] [role="listbox"],
+[data-testid="stSelectboxVirtualDropdown"] [role="option"],
+[data-testid="stSelectboxVirtualDropdown"] [data-item-hl],
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] [role="listbox"],
+[data-baseweb="popover"] [role="option"] {
+  background-color:#173253 !important;
+  color:#F3F7FF !important;
+}
+[data-testid="stSelectboxVirtualDropdown"] { border:1px solid #477EAC !important; }
+[data-testid="stSelectboxVirtualDropdown"] [role="option"]:is([data-hovered],[data-focused],[aria-selected="true"]) [data-item-hl],
+[data-baseweb="popover"] [role="option"]:hover,
+[data-baseweb="popover"] [role="option"][aria-selected="true"] { background-color:#204467 !important; }
