@@ -49,6 +49,8 @@ from deployment.input_guard import (
 )
 
 
+from deployment.gradcam_interpretation import describe_gradcam
+
 from deployment.research_report import (
     SHAP_GUIDE,
     clinical_sentence, interpretation, next_steps, build_research_report, REPORT_VERSION,
@@ -996,6 +998,21 @@ with right:
                         "🟡 **Yellow:** strong influence  \n"
                         "🟢 **Green:** moderate influence  \n"
                         "🔵 **Blue:** lower influence"
+                    )
+
+                    st.markdown("#### Patient-Specific Grad-CAM Interpretation")
+                    for view in VIEW_NAMES:
+                        if view in result["gradcam"]:
+                            st.markdown(describe_gradcam(
+                                processed_views[view], result["gradcam"][view],
+                                view, result["predicted_class"],
+                            ))
+                    st.caption(
+                        "Summary method: low < 0.33, moderate 0.33–0.67, high ≥ 0.67 "
+                        "on the normalized 0–1 heatmap (exact cutoffs: 1/3 and 2/3). "
+                        "Percentages cover non-black image pixels, not segmented brain or tumor tissue. "
+                        "Location uses the peak pixels in a 3 × 3 image grid; left/right refer to the displayed image. "
+                        "Activation is relative within each view and is not a disease probability."
                     )
 
             if result.get("clinical_shapley"):
