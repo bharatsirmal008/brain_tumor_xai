@@ -1007,13 +1007,7 @@ with right:
                                 processed_views[view], result["gradcam"][view],
                                 view, result["predicted_class"],
                             ))
-                    st.caption(
-                        "Summary method: low < 0.33, moderate 0.33–0.67, high ≥ 0.67 "
-                        "on the normalized 0–1 heatmap (exact cutoffs: 1/3 and 2/3). "
-                        "Percentages cover non-black image pixels, not segmented brain or tumor tissue. "
-                        "Location uses the peak pixels in a 3 × 3 image grid; left/right refer to the displayed image. "
-                        "Activation is relative within each view and is not a disease probability."
-                    )
+
 
             if result.get("clinical_shapley"):
                 with st.container(border=True, key="clinical_xai_panel"):
@@ -1087,6 +1081,7 @@ with right:
                             saved=saved,
                             original_images={view: upload.getvalue() for view, upload in files.items()},
                             overlay_images=overlays,
+                            processed_images=processed_views,
                         )
                         saved["pdf_version"] = REPORT_VERSION
                 except Exception:

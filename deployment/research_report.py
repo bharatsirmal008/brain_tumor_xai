@@ -1,5 +1,6 @@
 """Plain-language interpretation and in-memory two-stage research PDF reports."""
 from io import BytesIO
+from deployment.gradcam_interpretation import describe_gradcam
 from datetime import datetime, timezone
 from xml.sax.saxutils import escape
 from PIL import Image as PILImage
@@ -88,10 +89,10 @@ def next_steps(screening, result=None, warnings=()):
     return steps
 
 
-REPORT_VERSION = "template-no-id-v2-outcome-suggestions"
+REPORT_VERSION = "template-no-id-v3-gradcam-interpretation"
 
 
-def build_research_report(*, saved, original_images, overlay_images):
+def build_research_report(*, saved, original_images, overlay_images, processed_images=None):
     """Template-style assessment report without patient or study identifiers."""
     output = BytesIO()
     navy = colors.HexColor('#173F63')
@@ -191,6 +192,16 @@ def build_research_report(*, saved, original_images, overlay_images):
     if positive and overlay_images:
         add('Grad-CAM Overlays','Heading2');images(overlay_images)
         add('Red/yellow indicate stronger model attention; blue indicates lower attention. Colors and contours are not confirmed tumor outlines. These are independent 2D views.')
+    if result and result.get('gradcam') and processed_images:
+        add('Patient-Specific Grad-CAM Interpretation', 'Heading2')
+        for view in ('axial', 'coronal', 'sagittal'):
+            if view in result['gradcam'] and view in processed_images:
+                text = describe_gradcam(processed_images[view], result['gradcam'][view], view, result['predicted_class'])
+                # Escape data first, then translate the helper's bold spans for ReportLab.
+                parts = escape(text).split('**')
+                formatted = ''.join(('<b>' if i % 2 else '</b>') + part if i else part for i, part in enumerate(parts))
+                story.append(Paragraph(formatted, styles['BodyText']))
+                story.append(Spacer(1, 2*mm))
     if result:
         add('Class Probabilities','Heading2')
         table([['Class','Probability']]+[[name.title(),f'{value:.2%}'] for name,value in result['probabilities'].items()],[100*mm,74*mm],header=True)
